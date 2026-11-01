@@ -1,0 +1,34 @@
+# Example configuration for gamma p -> K*+ Lambda, K*+ -> K+ pi0, Lambda -> p pi-.
+# Copy it, then set the paths, histogram names and measured polarization angles.
+#
+# Expected layout:  <source_root>/Mass_<lo>_<hi>/t_<lo>_<hi>/<files below>
+source_root: /path/to/skims/out
+tree: ntFSGlueX_100000000_100001
+file_prefix: tree_pi0kplamb__B4_M7_M18
+
+# FSRoot labels of reaction "Beam Lambda K+ Pi0 Proton Pi-"
+particles: {beam: PB, kp: P2, pi0: P3, proton: P1a, pim: P1b}
+kinematics_prefix: ""          # "" = kinematic-fit four-momenta, as FSRootDataReader reads them
+
+data_files:
+  data:
+    pattern: "{prefix}_{orientation}_SIGNAL_SKIM.root"
+  bkgnd:
+    pattern: "{prefix}_{orientation}_SIDEBANDS_SKIM.root"
+    weight: {suffix: ".weight", tree_suffix: "_weight", branch: weight}
+accmc_file: "{prefix}_PSMC_SIGNAL_SKIM.root"
+accmc_truth: true              # also store mc_* angles from the thrown branches of accepted events
+genmc_file: tree_thrown_PSMCGEN_SKIM.root
+genmc_full: false              # true adds float32 four-vectors (~3x larger)
+genmc_step: 500000
+
+# Beam polarization: one TH1 of P_gamma vs E_beam per orientation, and the polarization
+# angle (degrees) used for Phi = Phi_lab + pol_angle.  Replace the nominal angles below
+# with the measured ones used in your fit.
+pol_file: /path/to/polarization.root
+orientations:
+  PARA_0:   {pol_angle_deg: 0.0,   pol_hist: hPol0}
+  PERP_45:  {pol_angle_deg: 45.0,  pol_hist: hPol45}
+  PERP_90:  {pol_angle_deg: 90.0,  pol_hist: hPol90}
+  PARA_135: {pol_angle_deg: -45.0, pol_hist: hPol135}
+  AMO:      {pol_angle_deg: null,  pol_hist: null}

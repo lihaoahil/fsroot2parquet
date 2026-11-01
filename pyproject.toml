@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fsroot2parquet"
+version = "0.1.0"
+description = "Convert AmpTools-ready FSRoot trees into partitioned Parquet with the decay angles, weights and beam polarization a JAX likelihood needs"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Hao Li", email = "lihaoahil@gmail.com"}]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.22",
+    "uproot>=5.0",
+    "awkward>=2.0",
+    "pyarrow>=12",
+    "pyyaml>=6",
+]
+
+[project.urls]
+Homepage = "https://github.com/lihaoahil/fsroot2parquet"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+fsroot2parquet = "fsroot2parquet.convert:main"
+
+[tool.setuptools.packages.find]
+include = ["fsroot2parquet*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
