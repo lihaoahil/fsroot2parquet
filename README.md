@@ -17,6 +17,23 @@ cp config/example.yaml my.yaml                         # set paths, histogram na
 sbatch -A ACCOUNT -p PARTITION --array=0-5 scripts/slurm_array.sh my.yaml OUT   # one task per (mass, t) bin; PY=... picks python
 ```
 
+## Rebinning
+
+Convert once with the t bins of each mass bin merged, then cut that into any binning inside
+its range. No ROOT file is read again:
+
+```bash
+.venv/bin/fsroot2parquet --config my.yaml --out MERGED --merge-tbins            # tbin=<first lo>_<last hi>
+.venv/bin/fsroot2parquet-rebin --src MERGED --out T12 --t-edges 0.1,0.2,0.3,...,2.5 [--mass-edges 0.84,0.89,0.94]
+```
+
+Rows go to `lo <= -t_hyperon < hi` and `lo <= M_Kpi < hi`. For data and accepted MC
+`t = t_hyperon` (kinematic fit); thrown MC is binned on its own `t_hyperon`, which is the
+variable thrown skims are cut on (its `t = (beam − K*)²` is not). The merge is exact only if
+the skims' combo selection does not depend on the t bin, for example one combo per
+(event, beam photon). Check that no (run, event, E_beam) appears in two t bins before you
+rely on it. New edges must lie inside the source coverage, and `REBIN.json` records them.
+
 ## Input layout
 
 ```
@@ -37,7 +54,7 @@ OUT/polarization.parquet                                 orientation, pol_angle_
 OUT/manifests/<mass>__<tbin>.json                        source files (size, mtime), TTree cycles, rows, weight sums, bin checks
 OUT/sample=data/mass=<lo_hi>/tbin=<lo_hi>/part-0.parquet signal + sideband rows of every orientation
 OUT/sample=accmc/mass=<lo_hi>/tbin=<lo_hi>/part-0.parquet accepted MC, once (no orientation)
-OUT/sample=genmc/mass=<lo_hi>/tbin=<lo_hi>/part-0.parquet thrown MC, derived float32 columns only
+OUT/sample=genmc/mass=<lo_hi>/tbin=<lo_hi>/part-0.parquet thrown MC, derived columns only (float32; t, t_hyperon, M_Kpi in float64)
 ```
 
 The files are partitioned by (mass, t) bin, which is the unit a fit loads. Orientation
@@ -56,11 +73,12 @@ together.
 | `E_beam`, `t`, `t_hyperon`, `M_Kpi`, `M_ppi` | `t = (beam − K*)²`, `t_hyperon = (target − Λ)²` |
 | `theta_V`, `phi_V` | K⁺ in the K\* helicity frame |
 | `n_x`, `n_y`, `n_z`, `theta_Y`, `phi_Y` | proton direction in the hyperon frame (AmpTools stores the cosines n) |
+| `*_GJ` (`theta_V`, `phi_V`, `theta_Y`, `phi_Y`, `n_x`, `n_y`, `n_z`) | the same in the Gottfried-Jackson frames: z = beam in the K\* rest frame, z = target proton in the hyperon rest frame; same y axes, so `n_y_GJ = n_y` and `Phi` is unchanged |
 | `Phi_lab` | AmpTools `userVars[kBigPhi]` |
 | `pol_angle_deg`, `Phi`, `P_gamma` | `Phi = Phi_lab + polAngle`; `P_gamma` from the TH1 at `E_beam` (under/overflow → 0); NaN / Phi_lab / 0 for AMO |
 | `{beam,kp,pi0,proton,pim}_{E,px,py,pz}` | kinematic-fit lab four-vectors |
 
-`accmc` has the same kinematic columns, plus `mc_*` angles from the thrown branches of
+`accmc` has the same kinematic columns, plus `mc_*` angles (helicity and GJ) from the thrown branches of
 the accepted events. It has no `Phi` or `P_gamma`, because those depend on the
 orientation: `load.accmc_by_orientation` stacks one copy per orientation for the
 normalization integrals Z_o.
@@ -70,7 +88,7 @@ and tagged `convention_version` in every file's metadata.
 
 ## Validation
 
-1. `pytest`: boosts, invariants, rotation about the beam, TH1 bin rules, and an end-to-end conversion of a synthetic skim directory.
+1. `pytest`: boosts, invariants, rotation about the beam, GJ crossing angles against the invariant (s, t, u) formula, TH1 bin rules, an end-to-end conversion of a synthetic skim directory, and merge + rebin reproducing the per-bin conversion row for row.
 2. Against the C++ (`validate/calc_user_vars_ref.C` runs the `calcUserVars` body verbatim on a tree):
    ```bash
    root -l -b -q 'validate/calc_user_vars_ref.C("TREE.root","ntFSGlueX_100000000_100001","","POL.root","hPol0",2000,"ref.csv")'

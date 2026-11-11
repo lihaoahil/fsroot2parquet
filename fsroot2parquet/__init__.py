@@ -3,7 +3,7 @@
 The angles reproduce ``KStarHyperonExtended::calcUserVars`` (halld_sim, twops_hao), so a
 likelihood built on these columns sees exactly the events and frames the AmpTools fit saw.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .kinematics import CONVENTION_VERSION, kstar_hyperon_angles
 from .polarization import PolarizationTable

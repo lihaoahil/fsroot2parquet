@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fsroot2parquet"
-version = "0.1.0"
+version = "0.2.0"
 description = "Convert AmpTools-ready FSRoot trees into partitioned Parquet with the decay angles, weights and beam polarization a JAX likelihood needs"
 readme = "README.md"
 license = {text = "MIT"}
@@ -26,6 +26,7 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 fsroot2parquet = "fsroot2parquet.convert:main"
+fsroot2parquet-rebin = "fsroot2parquet.rebin:main"
 
 [tool.setuptools.packages.find]
 include = ["fsroot2parquet*"]

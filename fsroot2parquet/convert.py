@@ -1,4 +1,4 @@
-"""FSRoot skims -> Parquet, one bin per call.
+"""FSRoot skims -> Parquet, one bin per call (or one merged t range per mass bin).
 
 Layout written under ``--out``::
 
@@ -11,6 +11,11 @@ Layout written under ``--out``::
 Usage::
 
     python -m fsroot2parquet.convert --config config/example.yaml --out OUT [--tbin 't_0.10*']
+    python -m fsroot2parquet.convert --config config/example.yaml --out OUT --merge-tbins
+
+``--merge-tbins`` concatenates the t-bin directories of each mass bin into one bin
+``tbin=<first lo>_<last hi>`` (the t bins must be contiguous).  The rows are the union of the
+per-bin rows, so ``fsroot2parquet.rebin`` can cut the result into any t binning inside that range.
 """
 from __future__ import annotations
 
@@ -33,9 +38,12 @@ from .polarization import PolarizationTable
 
 PARTICLES = ("beam", "kp", "pi0", "proton", "pim")
 COMPONENTS = (("E", "En"), ("px", "Px"), ("py", "Py"), ("pz", "Pz"))
+GJ = ("theta_V_GJ", "phi_V_GJ", "theta_Y_GJ", "phi_Y_GJ", "n_x_GJ", "n_y_GJ", "n_z_GJ")
 DERIVED = ("E_beam", "t", "t_hyperon", "M_Kpi", "M_ppi", "theta_V", "phi_V",
-           "theta_Y", "phi_Y", "n_x", "n_y", "n_z", "Phi_lab")
-GENMC_DERIVED = ("E_beam", "t", "M_Kpi", "M_ppi", "theta_V", "phi_V", "theta_Y", "phi_Y", "Phi_lab")
+           "theta_Y", "phi_Y", "n_x", "n_y", "n_z", "Phi_lab", *GJ)
+GENMC_DERIVED = ("E_beam", "t", "t_hyperon", "M_Kpi", "M_ppi", "theta_V", "phi_V", "theta_Y", "phi_Y",
+                 "n_x", "n_y", "n_z", "Phi_lab", *GJ)
+GENMC_FLOAT64 = ("t", "t_hyperon", "M_Kpi")    # binning variables keep full precision so rebinning is exact
 _EDGES = re.compile(r"_(-?[\d.]+)_(-?[\d.]+)$")
 
 
@@ -134,13 +142,27 @@ def _containment(x: np.ndarray, lo: float, hi: float) -> float:
 
 # --------------------------------------------------------------------------- one bin
 
-def convert_bin(cfg: dict, pol: PolarizationTable, mass_dir: Path, tbin_dir: Path, out: Path,
+def _merged_label(tbin_dirs: list[Path]) -> tuple[str, float, float]:
+    """Label of the union of contiguous t bins, e.g. t_0.10_0.30 + t_0.30_0.50 -> 0.10_0.50."""
+    bins = sorted((_bin_label(d.name) for d in tbin_dirs), key=lambda b: b[1])
+    for (_, _, hi), (_, lo, _) in zip(bins, bins[1:]):
+        if abs(hi - lo) > 1e-9:
+            raise ValueError(f"t bins are not contiguous: {[b[0] for b in bins]}")
+    lo_s, hi_s = bins[0][0].split("_")[0], bins[-1][0].split("_")[1]
+    return f"{lo_s}_{hi_s}", bins[0][1], bins[-1][2]
+
+
+def convert_bin(cfg: dict, pol: PolarizationTable, mass_dir: Path, tbin_dir: Path | list[Path], out: Path,
                 samples: tuple[str, ...]) -> dict:
+    """Convert one (mass, t) bin.  A list of t-bin directories is merged into one output bin."""
+    tbin_dirs = sorted(tbin_dir, key=lambda d: _bin_label(d.name)[1]) if isinstance(tbin_dir, list) else [tbin_dir]
     mass, m_lo, m_hi = _bin_label(mass_dir.name)
-    tbin, t_lo, t_hi = _bin_label(tbin_dir.name)
+    tbin, t_lo, t_hi = _merged_label(tbin_dirs) if len(tbin_dirs) > 1 else _bin_label(tbin_dirs[0].name)
     tree, labels, prefix = cfg["tree"], cfg["particles"], cfg["file_prefix"]
     meta = {"convention_version": CONVENTION_VERSION, "converter": f"fsroot2parquet {__version__}", "mass": [m_lo, m_hi], "tbin": [t_lo, t_hi],
             "kinematics_prefix": cfg.get("kinematics_prefix", ""), "particles": labels}
+    if len(tbin_dirs) > 1:
+        meta["merged_tbins"] = [d.name for d in tbin_dirs]
     manifest = {**meta, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "samples": {}}
     part = lambda s: out / f"sample={s}" / f"mass={mass}" / f"tbin={tbin}" / "part-0.parquet"
     kin = cfg.get("kinematics_prefix", "")
@@ -149,8 +171,8 @@ def convert_bin(cfg: dict, pol: PolarizationTable, mass_dir: Path, tbin_dir: Pat
         t0 = time.time()
         pieces, infos = [], []
         for role, spec in cfg["data_files"].items():
-            for name in pol.orientations:
-                path = tbin_dir / spec["pattern"].format(prefix=prefix, orientation=name)
+            for name, tdir in ((n, d) for n in pol.orientations for d in tbin_dirs):
+                path = tdir / spec["pattern"].format(prefix=prefix, orientation=name)
                 if not path.exists():
                     infos.append({"role": role, "orientation": name, "missing": str(path)})
                     continue
@@ -182,39 +204,47 @@ def convert_bin(cfg: dict, pol: PolarizationTable, mass_dir: Path, tbin_dir: Pat
 
     if "accmc" in samples:
         t0 = time.time()
-        path = tbin_dir / cfg["accmc_file"].format(prefix=prefix)
-        cols, info = _read_sample(path, tree, labels, kin)
-        if cfg.get("accmc_truth", True):
-            t, _ = _open_tree(path, tree)
-            truth = _event_columns(_four_vectors(t.arrays(_branches(labels, "MC"), library="np"), labels, "MC"))
-            cols.update({f"mc_{k}": truth[k] for k in DERIVED})
+        pieces, infos = [], []
+        for tdir in tbin_dirs:
+            path = tdir / cfg["accmc_file"].format(prefix=prefix)
+            cols, info = _read_sample(path, tree, labels, kin)
+            if cfg.get("accmc_truth", True):
+                t, _ = _open_tree(path, tree)
+                truth = _event_columns(_four_vectors(t.arrays(_branches(labels, "MC"), library="np"), labels, "MC"))
+                cols.update({f"mc_{k}": truth[k] for k in DERIVED})
+            pieces.append(cols); infos.append(info)
+        cols = {k: np.concatenate([p[k] for p in pieces]) for k in pieces[0]}
         _write(_to_table(cols, meta), part("accmc"))
+        info = infos[0] if len(infos) == 1 else {"files": infos}
         manifest["samples"]["accmc"] = {"rows": len(cols["run"]), "seconds": round(time.time() - t0, 1), **info}
 
     if "genmc" in samples:
         t0 = time.time()
-        path = tbin_dir / cfg["genmc_file"]
-        t, cyc = _open_tree(path, tree)
         full = cfg.get("genmc_full", False)
         dst = part("genmc"); dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_suffix(".tmp")
-        writer, rows = None, 0
-        for arrs in t.iterate(_branches(labels, "MC"), step_size=cfg.get("genmc_step", 500_000), library="np"):
-            p4 = _four_vectors(arrs, labels, "MC")
-            ang = kstar_hyperon_angles(p4["beam"], p4["kp"], p4["pi0"], p4["proton"], p4["pim"])
-            chunk = {k: ang[k].astype(np.float32) for k in GENMC_DERIVED}
-            if full:
-                chunk.update({f"{p}_{c}": p4[p][:, i].astype(np.float32)
-                              for p in PARTICLES for i, (c, _) in enumerate(COMPONENTS)})
-            table = _to_table(chunk, meta)
-            if writer is None:
-                writer = pq.ParquetWriter(tmp, table.schema, compression="zstd")
-            writer.write_table(table)
-            rows += len(chunk["E_beam"])
+        writer, rows, infos = None, 0, []
+        for tdir in tbin_dirs:
+            path = tdir / cfg["genmc_file"]
+            t, cyc = _open_tree(path, tree)
+            n0 = rows
+            for arrs in t.iterate(_branches(labels, "MC"), step_size=cfg.get("genmc_step", 500_000), library="np"):
+                p4 = _four_vectors(arrs, labels, "MC")
+                ang = kstar_hyperon_angles(p4["beam"], p4["kp"], p4["pi0"], p4["proton"], p4["pim"])
+                chunk = {k: ang[k] if k in GENMC_FLOAT64 else ang[k].astype(np.float32) for k in GENMC_DERIVED}
+                if full:
+                    chunk.update({f"{p}_{c}": p4[p][:, i].astype(np.float32)
+                                  for p in PARTICLES for i, (c, _) in enumerate(COMPONENTS)})
+                table = _to_table(chunk, meta)
+                if writer is None:
+                    writer = pq.ParquetWriter(tmp, table.schema, compression="zstd")
+                writer.write_table(table)
+                rows += len(chunk["E_beam"])
+            infos.append({"rows": rows - n0, "file": _file_info(path), **cyc})
         writer.close()
         os.replace(tmp, dst)
-        manifest["samples"]["genmc"] = {"rows": rows, "seconds": round(time.time() - t0, 1),
-                                        "file": _file_info(path), **cyc}
+        info = {k: v for k, v in infos[0].items() if k != "rows"} if len(infos) == 1 else {"files": infos}
+        manifest["samples"]["genmc"] = {"rows": rows, "seconds": round(time.time() - t0, 1), **info}
 
     mpath = out / "manifests" / f"{mass}__{tbin}.json"
     mpath.parent.mkdir(parents=True, exist_ok=True)
@@ -233,6 +263,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--mass", default="Mass_*", help="glob over mass-bin directories")
     ap.add_argument("--tbin", default="t_*", help="glob over t-bin directories")
     ap.add_argument("--samples", default="data,accmc,genmc")
+    ap.add_argument("--merge-tbins", action="store_true",
+                    help="write the selected t bins of each mass bin as one merged bin (they must be contiguous)")
     args = ap.parse_args(argv)
 
     cfg = yaml.safe_load(Path(args.config).read_text())
@@ -244,11 +276,12 @@ def main(argv: list[str] | None = None) -> None:
 
     src = Path(cfg["source_root"])
     for mass_dir in sorted(p for p in src.iterdir() if p.is_dir() and fnmatch.fnmatch(p.name, args.mass)):
-        for tbin_dir in sorted(p for p in mass_dir.iterdir() if p.is_dir() and fnmatch.fnmatch(p.name, args.tbin)):
+        tdirs = sorted(p for p in mass_dir.iterdir() if p.is_dir() and fnmatch.fnmatch(p.name, args.tbin))
+        for group in ([tdirs] if args.merge_tbins else [[d] for d in tdirs]):
             t0 = time.time()
-            m = convert_bin(cfg, pol, mass_dir, tbin_dir, out, samples)
+            m = convert_bin(cfg, pol, mass_dir, group if len(group) > 1 else group[0], out, samples)
             counts = {s: v["rows"] for s, v in m["samples"].items() if s in samples}
-            print(f"{mass_dir.name}/{tbin_dir.name}: {counts}  {time.time() - t0:.0f} s", flush=True)
+            print(f"{mass_dir.name}/{'+'.join(d.name for d in group)}: {counts}  {time.time() - t0:.0f} s", flush=True)
 
 
 if __name__ == "__main__":
