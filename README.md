@@ -17,6 +17,59 @@ cp config/example.yaml my.yaml                         # set paths, histogram na
 sbatch -A ACCOUNT -p PARTITION --array=0-5 scripts/slurm_array.sh my.yaml OUT   # one task per (mass, t) bin; PY=... picks python
 ```
 
+## From unpartitioned trees: reduce once, select many times
+
+The two commands below start from the full FSRoot trees, before any skim into bins, and need no ROOT
+macro. They work for any reaction of the form γ + target → X + B with one or two particles at each vertex.
+
+```bash
+cp config/reduce_example.yaml reduce.yaml              # trees, particle labels, reaction, envelope
+cp config/select_example.yaml select.yaml              # cuts, sidebands, bins, polarization
+.venv/bin/fsroot2parquet-reduce --config reduce.yaml --out STORE
+.venv/bin/fsroot2parquet-select --config select.yaml   # `store` and `out` are in the config
+```
+
+**Stage 1, `fsroot2parquet-reduce`,** reads each tree once and keeps the rows inside an *envelope*: the
+loosest value of every cut that any later study will use. For those rows it writes the identifiers, the
+cut variables, derived masses, the kinematic variables in the helicity and Gottfried–Jackson frames, and the
+four-vectors. Nothing is cut at its analysis value, weighted or binned. Rows outside the envelope are
+gone until this stage is rerun, so choose it generously.
+
+**Stage 2, `fsroot2parquet-select`,** applies the analysis cuts, the signal and sideband regions with
+their weights, the beam polarization and the bin edges, all from one config, and writes the layout
+described under "Output layout" (plus the cut variables and a `period` column). A systematic
+variation is another config on the same store.
+
+- Cuts are expressions on column names: `(E_beam > 8.2) & (E_beam < 8.8)`, `abs(M_Lambda - 1.115) < 0.010`.
+- Sideband weights follow FSRoot's `CUTSBWT`: `scale` for a row in one sideband, `-scale_1 scale_2` in two,
+  and so on; such rows are `bkgnd` rows with `lik_weight = -weight`.
+- Bins are `lo < x < hi`, as in an FSRoot skim.
+- The kinematics are `kinematics.two_vertex_variables(beam, upper, lower)`; `names` in the config sets
+  the column names (`mass: M_Kpi`, `theta: theta_V`, ...). `kstar_hyperon_angles` is this function under
+  the K\*Λ names.
+
+Timing for trees of typical size (4 CPU threads, network disk); each run writes its own to `reduce.json`
+and `selection.json`:
+
+| step | input | time |
+|---|---|---|
+| reduce, data | 26M entries, 10 GB | 34 s |
+| reduce, accepted MC | 2M entries, 1 GB | 6 s |
+| reduce, thrown MC | 4M entries, 1 GB | 11 s |
+| select, six bins | a 1 GB store | 6–10 s |
+
+The result was compared row by row with the Parquet converted from FSRoot skims of the same trees: the
+same rows in every bin for data, accepted and thrown MC, with identical angles, orientations and
+polarization. Weights of rows in the RF sideband differ by 3 × 10⁻⁹ because FSRoot rounds the scale 1/6.
+
+## From FSRoot skims (one directory per bin)
+
+The original converter, for trees already skimmed into mass and t bins:
+
+```bash
+.venv/bin/fsroot2parquet --config my.yaml --out OUT    # config/example.yaml
+```
+
 ## Rebinning
 
 Convert once with the t bins of each mass bin merged, then cut that into any binning inside

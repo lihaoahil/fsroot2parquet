@@ -1,0 +1,40 @@
+# Stage 2 (fsroot2parquet-select): reduced store -> selected, weighted, binned Parquet.
+# A systematic variation is a copy of this file with other values.
+store: /path/to/reduced
+out: /path/to/selected/nominal
+
+cuts:                            # data and accepted MC
+  - ((run < 70000) & (E_beam > 8.2) & (E_beam < 8.8)) | ((run >= 70000) & (E_beam > 8.0) & (E_beam < 8.6))
+  - chi2dof < 5
+  - unused_energy < 0.1
+  - unused_tracks < 1
+  - (vertex_z >= 51.2) & (vertex_z <= 78.8)
+  - M_Lambda_pi0 > 2.0           # Sigma(1385) veto
+sample_cuts:
+  accmc: [mc_is_gen_beam == 1]
+  genmc:
+    - ((run < 70000) & (E_beam > 8.2) & (E_beam < 8.8)) | ((run >= 70000) & (E_beam > 8.0) & (E_beam < 8.6))
+
+# signal and sideband regions; weights as FSRoot's CUTSBWT.  `samples` defaults to [data, accmc];
+# the accepted MC is taken in the signal regions only.
+sidebands:
+  - {name: Lambda, signal: abs(M_Lambda - 1.115) < 0.010,
+     sideband: (abs(M_Lambda - 1.115) > 0.015) & (abs(M_Lambda - 1.115) < 0.035), scale: 0.5}
+  - {name: pi0, signal: abs(M_pi0 - 0.135) < 0.0125,
+     sideband: (abs(M_pi0 - 0.135) > 0.02) & (abs(M_pi0 - 0.135) < 0.045), scale: 0.5}
+  - {name: rf, signal: abs(rf_dt) < 2.004, sideband: abs(rf_dt) > 6.012, scale: 0.16666666666666666, samples: [data]}
+
+binning:                         # lo < sign * column < hi
+  mass: {column: M_Kpi, edges: [0.84, 0.94], format: "{:.3f}"}
+  t:    {column: t_hyperon, sign: -1, edges: [0.1, 0.3, 0.5, 0.7, 1.0, 1.5, 2.5], format: "{:.2f}"}
+
+# beam polarization: the tree value of the polarization angle that marks each orientation, the measured
+# angle used for Phi = Phi_lab + pol_angle, and a TH1 of P_gamma vs E_beam
+orientation_column: pol_angle
+pol_file: /path/to/polarization.root
+orientations:
+  PARA_0:   {tree_value: 0,   pol_angle_deg: 0.0,   pol_hist: hPol0}
+  PERP_45:  {tree_value: 45,  pol_angle_deg: 45.0,  pol_hist: hPol45}
+  PERP_90:  {tree_value: 90,  pol_angle_deg: 90.0,  pol_hist: hPol90}
+  PARA_135: {tree_value: 135, pol_angle_deg: -45.0, pol_hist: hPol135}
+  AMO:      {tree_value: -1,  pol_angle_deg: null,  pol_hist: null}

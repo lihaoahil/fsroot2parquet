@@ -1,0 +1,57 @@
+# Stage 1 (fsroot2parquet-reduce): unpartitioned FSRoot trees -> reduced Parquet store.
+# Example: gamma p -> K*+ Lambda, K*+ -> K+ pi0, Lambda -> p pi-.  Copy it and set the paths.
+tree: ntFSGlueX_100000000_100001
+kinematics_prefix: ""            # "" = kinematic-fit four-momenta; "R" = measured
+
+# FSRoot labels of the particles used below (any names; they become the four-vector column prefixes)
+particles: {beam: PB, kp: P2, pi0: P3, proton: P1a, pim: P1b, lam: P1}
+
+# gamma + target -> upper vertex + lower vertex; the first particle of a vertex is its analyzer
+reaction: {beam: beam, upper: [kp, pi0], lower: [proton, pim], target_mass: 0.938272}
+gottfried_jackson: true          # also write the *_GJ angles
+
+# names of the generic kinematic variables in the output (mass, mass_B, t, t_recoil, theta, phi, theta_B, phi_B)
+names: {mass: M_Kpi, mass_B: M_ppi, t_recoil: t_hyperon, theta: theta_V, phi: phi_V, theta_B: theta_Y, phi_B: phi_Y}
+
+# tree branches copied as columns (output name: branch), for cuts in stage 2
+branches: {chi2dof: Chi2DOF, unused_energy: EnUnusedSh, unused_tracks: NumUnusedTracks, vertex_z: ProdVz, rf_dt: RFDeltaT}
+
+# derived cut variables: mass(...) / mass2(...) of the summed four-vectors of the named particles
+variables:
+  M_Lambda: mass(lam)
+  M_pi0: mass(pi0)
+  M_Lambda_pi0: mass(lam, pi0)
+
+# the envelope: the loosest cuts any later study will use.  Rows outside it are gone until stage 1 is rerun.
+envelope:
+  - (E_beam > 8.0) & (E_beam < 9.0)
+  - chi2dof < 10
+  - unused_energy < 0.5
+  - unused_tracks < 2
+  - (vertex_z > 48) & (vertex_z < 82)
+  - abs(M_Lambda - 1.115) < 0.05
+  - abs(M_pi0 - 0.135) < 0.06
+  - M_Lambda_pi0 > 1.5
+  - M_Kpi < 2.0
+  - -t_hyperon < 3.5
+envelope_genmc:                  # on the thrown kinematics
+  - (E_beam > 8.0) & (E_beam < 9.0)
+  - M_Kpi < 2.0
+  - -t_hyperon < 3.5
+
+step: 2000000                    # tree entries per chunk
+
+samples:                         # files: {period label: path}
+  data:
+    kind: data
+    branches: {pol_angle: PolarizationAngle}
+    files: {"2018_01": /path/to/tree_DATA.root}
+  accmc:
+    kind: accmc
+    branches: {mc_is_gen_beam: MCIsGenBeam}
+    truth: true                  # also mc_<variable> from the thrown four-vectors
+    files: {"2018_01": /path/to/tree_PSMC.root}
+  genmc:
+    kind: genmc
+    four_vectors: false          # true adds float32 four-vectors
+    files: {"2018_01": /path/to/tree_thrown_PSMCGEN.root}

@@ -72,77 +72,92 @@ def _cosines(v, x, y, z):
     return tuple(np.clip(_dot(v, e) / vmag, -1.0, 1.0) for e in (x, y, z))
 
 
-def kstar_hyperon_angles(beam, kp, pi0, proton, pim, gj: bool = True) -> dict[str, np.ndarray]:
-    """userVars of KStarHyperonExtended plus the invariants used for binning.
+GJ_SUFFIX = "_GJ"
+_KSTAR_HYPERON_NAMES = {"mass": "M_Kpi", "mass_B": "M_ppi", "t_recoil": "t_hyperon", "theta": "theta_V", "phi": "phi_V",
+                        "theta_B": "theta_Y", "phi_B": "phi_Y"}
 
-    With ``gj`` the Gottfried-Jackson angles (``*_GJ``) are added.
 
-    ``kp, pi0`` are the K* daughters (kIndices), ``proton, pim`` the hyperon daughters
-    (lambdaIndices).  Returns a dict of (N,) float64 arrays.
+def two_vertex_variables(beam, upper, lower, target_mass: float = TARGET_MASS, gj: bool = True) -> dict[str, np.ndarray]:
+    """Kinematic variables of  beam + target -> X + B  for any reaction of this topology.
+
+    ``upper`` is the list of four-vectors of the meson system X (one or two particles), ``lower`` that of the
+    recoil system B (one or two).  The first particle of a two-particle vertex is its analyzer.  Returns
+
+      E_beam, t = (beam - X)^2, t_recoil = (target - B)^2, mass, mass_B, Phi_lab         always
+      theta, phi                    decay angles of X in its helicity frame               two-particle X
+      theta_B, phi_B, n_x, n_y, n_z decay angles and direction cosines in the B frame     two-particle B
+      the same with suffix _GJ in the Gottfried-Jackson frames                            with ``gj``
+
+    The frames are those of the module docstring; every operation is the one of ``calcUserVars``.
     """
-    beam, kp, pi0, proton, pim = (np.asarray(a, dtype=np.float64) for a in (beam, kp, pi0, proton, pim))
-    resonance = kp + pi0
-    hyperon = proton + pim
-
-    hyperon_resonance = boost_to_rest(hyperon, resonance)
-    p1_resonance = boost_to_rest(kp, resonance)
-    kstar_hyperon = boost_to_rest(resonance, hyperon)
-    y1_hyperon = boost_to_rest(proton, hyperon)
-
+    beam = np.asarray(beam, dtype=np.float64)
+    upper = [np.asarray(p, dtype=np.float64) for p in upper]
+    lower = [np.asarray(p, dtype=np.float64) for p in lower]
+    if not 1 <= len(upper) <= 2 or not 1 <= len(lower) <= 2:
+        raise NotImplementedError("each vertex must have one or two particles")
+    resonance = upper[0] + upper[1] if len(upper) == 2 else upper[0]
+    hyperon = lower[0] + lower[1] if len(lower) == 2 else lower[0]
     beam_hat = _unit(beam[:, 1:])
-
-    # K* helicity frame
     y = _unit(np.cross(beam_hat, -_unit(hyperon[:, 1:])))
-    z = -_unit(hyperon_resonance[:, 1:])
-    x = _unit(np.cross(y, z))
-    a = p1_resonance[:, 1:]
-    ax, ay, az = _dot(a, x), _dot(a, y), _dot(a, z)
-    theta_V = np.arctan2(np.hypot(ax, ay), az)        # TVector3::Theta
-    phi_V = np.arctan2(ay, ax)                         # TVector3::Phi
-
-    # hyperon frame
-    yH = _unit(np.cross(beam_hat, -_unit(resonance[:, 1:])))
-    zH = -_unit(kstar_hyperon[:, 1:])
-    xH = _unit(np.cross(yH, zH))
-    q = y1_hyperon[:, 1:]
-    qmag = np.linalg.norm(q, axis=-1)
-    # cos(TVector3::Angle) = clamp(q . e / |q| |e|); the axes are unit vectors
-    n_x = np.clip(_dot(q, xH) / qmag, -1.0, 1.0)
-    n_y = np.clip(_dot(q, yH) / qmag, -1.0, 1.0)
-    n_z = np.clip(_dot(q, zH) / qmag, -1.0, 1.0)
-
     eps = np.array([1.0, 0.0, 0.0])
-    Phi_lab = np.arctan2(y @ eps, _dot(beam_hat, np.cross(eps, y)))
-
     target = np.zeros_like(beam)
-    target[:, 0] = TARGET_MASS
+    target[:, 0] = target_mass
     out = {
         "E_beam": beam[:, 0],
         "t": mass2(beam - resonance),
-        "t_hyperon": mass2(target - hyperon),
-        "M_Kpi": np.sqrt(np.clip(mass2(resonance), 0.0, None)),
-        "M_ppi": np.sqrt(np.clip(mass2(hyperon), 0.0, None)),
-        "theta_V": theta_V,
-        "phi_V": phi_V,
-        "n_x": n_x,
-        "n_y": n_y,
-        "n_z": n_z,
-        "theta_Y": np.arccos(n_z),
-        "phi_Y": np.arctan2(n_y, n_x),
-        "Phi_lab": Phi_lab,
+        "t_recoil": mass2(target - hyperon),
+        "mass": np.sqrt(np.clip(mass2(resonance), 0.0, None)),
+        "mass_B": np.sqrt(np.clip(mass2(hyperon), 0.0, None)),
+        "Phi_lab": np.arctan2(y @ eps, _dot(beam_hat, np.cross(eps, y))),
     }
-    if gj:
-        # x = y x z_GJ, then z = x x y: an orthonormal frame even when the four-momenta do not
-        # balance exactly (thrown MC), identical to z_GJ when they do (data, kinematic fit)
-        xG = _unit(np.cross(y, _unit(boost_to_rest(beam, resonance)[:, 1:])))
-        zG = np.cross(xG, y)
-        out["theta_V_GJ"], out["phi_V_GJ"] = _polar(a, xG, y, zG)
-        xHG = _unit(np.cross(yH, _unit(boost_to_rest(target, hyperon)[:, 1:])))
-        zHG = np.cross(xHG, yH)
-        nx, ny, nz = _cosines(q, xHG, yH, zHG)
-        out.update({"n_x_GJ": nx, "n_y_GJ": ny, "n_z_GJ": nz,
-                    "theta_Y_GJ": np.arccos(nz), "phi_Y_GJ": np.arctan2(ny, nx)})
+    if len(upper) == 2:
+        z = -_unit(boost_to_rest(hyperon, resonance)[:, 1:])
+        x = _unit(np.cross(y, z))
+        a = boost_to_rest(upper[0], resonance)[:, 1:]
+        ax, ay, az = _dot(a, x), _dot(a, y), _dot(a, z)
+        out["theta"] = np.arctan2(np.hypot(ax, ay), az)        # TVector3::Theta
+        out["phi"] = np.arctan2(ay, ax)                         # TVector3::Phi
+        if gj:
+            # x = y x z_GJ, then z = x x y: an orthonormal frame even when the four-momenta do not
+            # balance exactly (thrown MC), identical to z_GJ when they do (data, kinematic fit)
+            xG = _unit(np.cross(y, _unit(boost_to_rest(beam, resonance)[:, 1:])))
+            zG = np.cross(xG, y)
+            out["theta" + GJ_SUFFIX], out["phi" + GJ_SUFFIX] = _polar(a, xG, y, zG)
+    if len(lower) == 2:
+        yH = _unit(np.cross(beam_hat, -_unit(resonance[:, 1:])))
+        zH = -_unit(boost_to_rest(resonance, hyperon)[:, 1:])
+        xH = _unit(np.cross(yH, zH))
+        q = boost_to_rest(lower[0], hyperon)[:, 1:]
+        qmag = np.linalg.norm(q, axis=-1)
+        # cos(TVector3::Angle) = clamp(q . e / |q| |e|); the axes are unit vectors
+        n_x = np.clip(_dot(q, xH) / qmag, -1.0, 1.0)
+        n_y = np.clip(_dot(q, yH) / qmag, -1.0, 1.0)
+        n_z = np.clip(_dot(q, zH) / qmag, -1.0, 1.0)
+        out.update({"n_x": n_x, "n_y": n_y, "n_z": n_z, "theta_B": np.arccos(n_z), "phi_B": np.arctan2(n_y, n_x)})
+        if gj:
+            xHG = _unit(np.cross(yH, _unit(boost_to_rest(target, hyperon)[:, 1:])))
+            zHG = np.cross(xHG, yH)
+            nx, ny, nz = _cosines(q, xHG, yH, zHG)
+            out.update({"n_x" + GJ_SUFFIX: nx, "n_y" + GJ_SUFFIX: ny, "n_z" + GJ_SUFFIX: nz,
+                        "theta_B" + GJ_SUFFIX: np.arccos(nz), "phi_B" + GJ_SUFFIX: np.arctan2(ny, nx)})
     return out
+
+
+def rename(variables: dict, names: dict) -> dict:
+    """Rename generic variables (mass, theta, theta_B, ...) by ``names``; a _GJ variable follows its base name."""
+    def new(key):
+        base, gj = (key[:-len(GJ_SUFFIX)], GJ_SUFFIX) if key.endswith(GJ_SUFFIX) else (key, "")
+        return names.get(key, names.get(base, base) + gj)
+    return {new(k): v for k, v in variables.items()}
+
+
+def kstar_hyperon_angles(beam, kp, pi0, proton, pim, gj: bool = True) -> dict[str, np.ndarray]:
+    """userVars of KStarHyperonExtended plus the invariants used for binning: ``two_vertex_variables`` for
+    K* -> K+ pi0 and hyperon -> p pi-, under the names of the K* Lambda analysis.
+
+    With ``gj`` the Gottfried-Jackson angles (``*_GJ``) are added.  Returns a dict of (N,) float64 arrays.
+    """
+    return rename(two_vertex_variables(beam, [kp, pi0], [proton, pim], gj=gj), _KSTAR_HYPERON_NAMES)
 
 
 def wrap_angle(a: np.ndarray) -> np.ndarray:
