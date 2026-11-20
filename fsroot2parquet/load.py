@@ -38,7 +38,7 @@ def list_bins(root: str | Path, sample: str = "data") -> list[tuple[str, str]]:
 
 
 def read_polarization(root: str | Path) -> PolarizationTable:
-    return PolarizationTable.from_arrow(pq.read_table(Path(root) / "polarization.parquet"))
+    return PolarizationTable.from_arrow(pq.read_table(Path(root) / "polarization.parquet", partitioning=None))
 
 
 def load_bin(root: str | Path, mass: str, tbin: str, sample: str = "data", columns=None,
@@ -49,7 +49,8 @@ def load_bin(root: str | Path, mass: str, tbin: str, sample: str = "data", colum
         filters = [("orientation", "in", list(orientations)), ("role", "in", list(roles))]
         if columns is not None:
             columns = list(dict.fromkeys(["orientation", "role", *columns]))
-    table = pq.read_table(_part(root, sample, mass, tbin), columns=columns, filters=filters)
+    table = pq.read_table(_part(root, sample, mass, tbin), columns=columns, filters=filters,
+                          partitioning=None)              # the path keys are not columns
     out = {}
     for name in table.column_names:
         col = table[name].combine_chunks()

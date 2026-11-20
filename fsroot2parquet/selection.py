@@ -51,7 +51,7 @@ def read_store(store: Path, sample: str, periods=None) -> tuple[dict[str, np.nda
         parts = [p for p in parts if p.parent.name.split("=", 1)[1] in periods]
     if not parts:
         raise FileNotFoundError(f"no reduced files for sample {sample!r} under {store}")
-    tables = [pq.read_table(p) for p in parts]
+    tables = [pq.read_table(p, partitioning=None) for p in parts]      # the path keys are not columns
     meta = {k.decode(): json.loads(v) for k, v in (tables[0].schema.metadata or {}).items()}
     table = pa.concat_tables([t.replace_schema_metadata(None) for t in tables])
     cols = {name: table[name].to_numpy() for name in table.column_names}
