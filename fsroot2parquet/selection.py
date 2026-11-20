@@ -60,11 +60,20 @@ def read_store(store: Path, sample: str, periods=None) -> tuple[dict[str, np.nda
 
 
 def sideband_weights(sidebands: list[dict], cols, n: int) -> tuple[np.ndarray, np.ndarray]:
-    """(in the signal region of every sideband variable, FSRoot CUTSBWT weight; 0 outside all regions)."""
+    """(in the signal region of every sideband variable, FSRoot CUTSBWT weight; 0 outside all regions).
+
+    The signal and sideband regions of each variable must be disjoint: FSRoot would count a row in both in CUT and
+    in CUTSBWT, which this split into data and bkgnd rows cannot represent, so such a row raises a ValueError.
+    """
     signal = np.ones(n, dtype=bool)
     weight = np.zeros(n)
     regions = [(np.asarray(evaluate(s["signal"], cols), bool), np.asarray(evaluate(s["sideband"], cols), bool),
                 float(s["scale"])) for s in sidebands]
+    for s, (sig, side, _) in zip(sidebands, regions):
+        both = int(np.count_nonzero(sig & side))
+        if both:
+            raise ValueError(f"sideband {s.get('name', s['signal'])!r}: {both} rows are in both the signal region "
+                             f"{s['signal']!r} and the sideband region {s['sideband']!r}; the regions must be disjoint")
     for sig, _, _ in regions:
         signal &= sig
     for pattern in itertools.product((0, 1), repeat=len(regions)):

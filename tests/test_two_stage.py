@@ -103,6 +103,14 @@ def test_sideband_weights_follow_fsroot():
     assert weight.tolist() == [0.0, 0.5, 0.25, -0.125, 0.0]         # the last row is in no region
 
 
+def test_overlapping_sideband_regions_are_rejected():
+    """A row in both the signal and the sideband region of one variable has no data/bkgnd split."""
+    x = {"u": np.array([0.0, 0.5, 2.0])}
+    sb = [{"name": "u", "signal": "abs(u) < 1", "sideband": "abs(u) > 0.4", "scale": 0.5}]
+    with pytest.raises(ValueError, match="'u': 1 rows are in both"):
+        sideband_weights(sb, x, 3)
+
+
 def test_selection_reproduces_a_direct_selection(stores):
     root, tree, sel = stores
     lam = np.stack([tree[f"{c}P1"] for c in ("En", "Px", "Py", "Pz")], axis=1)
